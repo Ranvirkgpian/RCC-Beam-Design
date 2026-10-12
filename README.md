@@ -1,7 +1,3 @@
-Here is the updated `README.md` code with the image paths correctly pointing to your `assets/` and `Screenshots/` folders.
-
-When you upload this to GitHub, as long as your folders are named exactly `assets` and `Screenshots` (case-sensitive), all the images will load perfectly.
-
 ```markdown
 # RCC Beam Designer (IS 456:2000)
 
@@ -96,10 +92,3 @@ python main_8.py
 * **9. Engineering Drawings (Longitudinal Section):** Visualizes side-view elevations, highlighting continuous longitudinal rebar runs and varied stirrup spacing zones across the span.
 
 * **10. Results & Export:** A final executive summary dashboard displaying the safety status of all structural checks, with direct export buttons for PDF reports, DXF drawings, and Excel spreadsheets.
-
-
-```
-
-*(Note: In the final image link, I used `Result%20and%20Report.png` replacing the spaces with `%20`. This ensures GitHub renders the image properly, as raw spaces in file paths can sometimes break markdown image previews!)*
-
-```
