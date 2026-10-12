@@ -63,13 +63,13 @@ python main_8.py
 ## Application Walkthrough & Screenshots
 
 * **1. Home Screen:** The application opens to a modern welcome dashboard where you can start a new project or resume a recent one.
-  ![Home Page](Screenshots/Home_Page.jpg)
+  ![Home Page](Screenshots/Home_Page.png)
 
 * **2. Beam Selection:** Choose the appropriate support conditions (Simply Supported, Cantilever, Continuous, Fixed, or Custom) to set the baseline empirical parameters.
-  ![Select Beam Type](Screenshots/Select_Beam_Page.jpg)
+  ![Select Beam Type](Screenshots/Select_Beam_Page.png)
 
 * **3. Beam Input Parameters:** Define the core geometry, concrete/steel material grades, and the factored design loads (Mu and Vu).
-  ![Beam Input](Screenshots/Beam_Input_Page.jpg)
+  ![Beam Input](Screenshots/Beam_Input_Page.png)
 
 * **4. Flexural Design:** The engine calculates effective depth, neutral axis limits, limiting moment capacity, and the required longitudinal reinforcement, displaying step-by-step mathematical breakdowns.
   ![Flexural Design](Screenshots/Flexural_Design_Page.png)
