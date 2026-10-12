@@ -169,6 +169,9 @@ def generate_pdf_report(filepath, session, max_step=6, is_dark=False):
             ["Actual Clear Spacing", f"{det.actual_spacing:.1f} mm — {'OK' if det.spacing_ok else 'FAIL'}" if det.actual_spacing else "N/A (Single Bar)"],
             ["Development Length (Ld)", f"{det.development_length:.1f} mm"],
         ]
+        if det.xu_provided is not None:
+            det_data.insert(2, ["Neutral Axis of Provided Steel (xu \u2264 xu,max)", f"{det.xu_provided:.1f} \u2264 {det.xu_max:.1f} mm \u2014 {'OK' if det.balanced_ok else 'FAIL'}"])
+        det_data.append(["Clear Cover to Links (Cl. 26.4.1)", f"{det.cover_provided:.1f} \u2265 {det.cover_required:.1f} mm \u2014 {'OK' if det.cover_ok else 'FAIL'}"])
         t_det = Table(det_data, colWidths=[70*mm, 60*mm])
         t_det.setStyle(TableStyle([
             ('FONTNAME', (0,0), (-1,-1), 'Helvetica'),
@@ -223,7 +226,9 @@ def generate_pdf_report(filepath, session, max_step=6, is_dark=False):
         
         dr1.add(Rect(cx0, cy0, cb_w, cb_h, fillColor=c_concrete, strokeColor=COLOR_LINE, strokeWidth=1))
         
-        cc = (s.effective_cover - 8) * c_scale
+        # effective cover is measured to the bar CENTRE, so clear cover to the link depends on the bar dia
+        cc_mm = s.effective_cover - 8 - bs.bar_dia / 2
+        cc = cc_mm * c_scale
         dr1.add(Rect(cx0 + cc, cy0 + cc, cb_w - 2*cc, cb_h - 2*cc, fillColor=None, strokeColor=c_stirrup, strokeWidth=1, rx=2, ry=2))
         
         tb_r = max((bs.bar_dia / 2) * c_scale, 1.5)
@@ -258,12 +263,12 @@ def generate_pdf_report(filepath, session, max_step=6, is_dark=False):
         # Panel 2: Stirrup Detail
         sx0 = 100*mm
         dr1.add(String(sx0, r1_h - 10, "STIRRUP DETAIL", fontName='Helvetica-Bold', fontSize=8, fillColor=COLOR_PRIMARY))
-        st_w, st_h = (s.b - 2*(s.effective_cover-8)) * c_scale, (s.D - 2*(s.effective_cover-8)) * c_scale
+        st_w, st_h = (s.b - 2*cc_mm) * c_scale, (s.D - 2*cc_mm) * c_scale
         dr1.add(Rect(sx0, cy0 + cc, st_w, st_h, fillColor=None, strokeColor=c_stirrup, strokeWidth=1.5, rx=2, ry=2))
         dr1.add(Line(sx0 + 3*mm, cy0 + cc + st_h, sx0 + 8*mm, cy0 + cc + st_h - 5*mm, strokeColor=c_stirrup, strokeWidth=1.5))
         dr1.add(Line(sx0, cy0 + cc + st_h - 3*mm, sx0 + 5*mm, cy0 + cc + st_h - 8*mm, strokeColor=c_stirrup, strokeWidth=1.5))
-        add_rl_dim(dr1, sx0, cy0+cc+st_h, sx0+st_w, cy0+cc+st_h, f"{int(s.b - 2*(s.effective_cover-8))}", offset=5)
-        add_rl_dim(dr1, sx0+st_w, cy0+cc, sx0+st_w, cy0+cc+st_h, f"{int(s.D - 2*(s.effective_cover-8))}", offset=5)
+        add_rl_dim(dr1, sx0, cy0+cc+st_h, sx0+st_w, cy0+cc+st_h, f"{int(s.b - 2*cc_mm)}", offset=5)
+        add_rl_dim(dr1, sx0+st_w, cy0+cc, sx0+st_w, cy0+cc+st_h, f"{int(s.D - 2*cc_mm)}", offset=5)
         dr1.add(String(sx0 + st_w/2, cy0 - 2*mm, f"135\u00b0 Hook", textAnchor='middle', fontName='Helvetica', fontSize=6, fillColor=COLOR_TEXT))
 
         story.append(KeepTogether([dr1]))
@@ -492,7 +497,7 @@ def generate_pdf_report(filepath, session, max_step=6, is_dark=False):
         else:
             reinf_txt += f"<br/><b>Stirrups:</b> {sh.stirrup_dia:.0f} mm &Oslash;, {sh.legs}-legged @ {sh.spacing:.0f} mm c/c throughout.<br/>"
 
-        reinf_txt += f"<br/><b>Clear Cover:</b> {s.effective_cover - 8:.0f} mm"
+        reinf_txt += f"<br/><b>Clear Cover to Links:</b> {s.effective_cover - 8 - s.bar_selection.bar_dia / 2:.1f} mm"
         # Wrap the text in a 1-cell Table for perfectly controlled padding and borders
         p_reinf = Paragraph(reinf_txt, ParagraphStyle('Reinf', parent=style_normal, leading=16))
         

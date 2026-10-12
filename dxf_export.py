@@ -9,7 +9,10 @@ def export_to_dxf(filepath, s):
     msp.add_lwpolyline([(0, 0), (s.b, 0), (s.b, s.D), (0, s.D), (0, 0)])
     
     # 2. Draw Stirrup (Color: Red)
-    cc = s.effective_cover - 8  # Clear cover
+    stirrup_dia = s.shear.stirrup_dia if s.shear else 8
+    t_dia = s.bar_selection.bar_dia if s.bar_selection else 20
+    # effective cover is to the bar CENTRE: clear cover to the link = eff. cover - stirrup - bar dia / 2
+    cc = s.effective_cover - stirrup_dia - t_dia / 2
     sx1, sy1 = cc, cc
     sx2, sy2 = s.b - cc, s.D - cc
     msp.add_lwpolyline(

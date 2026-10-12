@@ -93,6 +93,7 @@ class DesignSession:
             self.doubly = engine.get_doubly_reinforced_design(
                 b=self.b, d=self.flexural.d, mu=self.mu, m_lim=self.flexural.m_lim,
                 xu_max=self.flexural.xu_max, fck=self.flexural.fck, fy=self.flexural.fy,
+                d_dash=self.effective_cover
             )
         else:
             self.doubly = None
@@ -103,20 +104,21 @@ class DesignSession:
         if self.flexural.is_singly: return self.flexural.ast_final
         return self.doubly.ast_final
 
-        def get_ast_required_calc(self):
+    def get_ast_required_calc(self):
         if self.flexural is None: self.run_flexural()
         return self.flexural.ast if self.flexural.is_singly else self.doubly.ast_total
 
     def resolve_bars(self):
         """Single source of truth for the bars: manual override or auto-selected."""
         if self.flexural is None: self.run_flexural()
-        cc = self.effective_cover - 8
+        # Ast,lim: steel at xu = xu,max. A singly reinforced section must not be given more than this.
+        ast_lim = (0.36 * self.flexural.fck * self.b * self.flexural.xu_max / (0.87 * self.flexural.fy)) if self.flexural.is_singly else None
         if self.manual_bar_override:
             n, dia = self.manual_num_bars, self.manual_bar_dia
             tension = engine.BarSelection(bar_dia=dia, num_bars=n,
                 ast_provided=round(n * (math.pi / 4) * dia ** 2, 1), actual_clear_spacing=None, fits=True)
         else:
-            tension = engine.select_bars(ast_required=self.get_ast_for_design(), b=self.b, clear_cover=cc)
+            tension = engine.select_bars(ast_required=self.get_ast_for_design(), b=self.b, effective_cover=self.effective_cover, max_ast=ast_lim)
         comp = None
         if not self.flexural.is_singly and self.doubly is not None:
             if self.manual_bar_override:
@@ -124,7 +126,7 @@ class DesignSession:
                 comp = engine.BarSelection(bar_dia=dia, num_bars=n,
                     ast_provided=round(n * (math.pi / 4) * dia ** 2, 1), actual_clear_spacing=None, fits=True)
             else:
-                comp = engine.select_bars(ast_required=self.doubly.asc, b=self.b, clear_cover=cc, min_bars=2, max_bars=4)
+                comp = engine.select_bars(ast_required=self.doubly.asc, b=self.b, effective_cover=self.effective_cover, min_bars=2, max_bars=4)
         self.bar_selection, self.comp_bar_selection = tension, comp
         return tension, comp
 
@@ -1304,6 +1306,7 @@ class FlexuralPage(WizardPage):
             doubly = engine.get_doubly_reinforced_design(
                 b=self.session.b, d=result.d, mu=self.session.mu, m_lim=result.m_lim,
                 xu_max=result.xu_max, fck=result.fck, fy=result.fy,
+                d_dash=self.session.effective_cover
             )
             self.session.doubly = doubly
 
@@ -1329,7 +1332,7 @@ class FlexuralPage(WizardPage):
             self.on_back, self.on_next, 
             back_label="← Back: Beam Input",
             next_label="Next: Shear Design →",
-            info_text="Note: Flexural capacities calculated using strain compatibility as per IS 456."
+            info_text="Note: Flexural design uses the limit state stress block of IS 456 (Cl. 38.1, Annex G)."
         )
         self.banner_layout.addWidget(banner)
 
@@ -1817,12 +1820,18 @@ class ServiceabilityPage(WizardPage):
         info_icon.setFixedSize(20, 20)
         info_icon.setAlignment(Qt.AlignCenter)
         note_layout.addWidget(info_icon, alignment=Qt.AlignTop)
+
+        span_msg = ""
+        if srv.needs_deflection_calc:
+            span_msg = "<br>• <b>Cantilever span above 10 m:</b> IS 456 Cl. 23.2.1(b) requires an actual deflection calculation; the L/d result above is not sufficient."
+        elif srv.span_factor < 1.0:
+            span_msg = f"<br>• Span above 10 m: basic ratio multiplied by 10/span = {srv.span_factor:.3f} (Cl. 23.2.1 b)."
         
         note_lbl = QLabel(
             "<b>Note</b><br>"
             "• IS 456 Fig. 4 is a chart, not an equation. The modification factor is computed from a published curve-fit of those curves, using fs = 0.58·fy·(Ast,req/Ast,prov) and the provided Pt.<br>"
             "• Allowable span/depth ratio = (Basic span/depth ratio) × (Modification factor).<br>"
-            "• Deflection control follows the empirical L/d approach as per IS 456:2000 (Clause 23.2)."
+            "• Deflection control follows the empirical L/d approach as per IS 456:2000 (Clause 23.2)." + span_msg
         )
         note_lbl.setStyleSheet(f"color: {note_txt}; font-size: 12px; border: none;")
         note_lbl.setWordWrap(True)
@@ -1965,41 +1974,18 @@ class DetailingPage(WizardPage):
         header_bg = "#0F172A" if dark else "#F8FAFC"
         title_color = "#60A5FA" if dark else "#1D4ED8"
 
-        # Initialize Data
-        if s.manual_bar_override:
-            bar_dia = s.manual_bar_dia
-            num_bars = s.manual_num_bars
-            ast_provided = num_bars * (math.pi / 4) * bar_dia ** 2
-            bar_selection = engine.BarSelection(
-                bar_dia=bar_dia, num_bars=num_bars, ast_provided=round(ast_provided, 1),
-                actual_clear_spacing=None, fits=True,
-            )
-        else:
-            bar_selection = engine.select_bars(ast_required=ast_required, b=s.b, clear_cover=s.effective_cover - 8)
-            bar_dia = bar_selection.bar_dia
-            num_bars = bar_selection.num_bars
-            ast_provided = bar_selection.ast_provided
-        s.bar_selection = bar_selection
-
-        comp_selection = None
-        if is_doubly:
-            if s.manual_bar_override:
-                comp_dia = s.manual_comp_bar_dia
-                comp_n = s.manual_comp_num_bars
-                comp_ast = comp_n * (math.pi / 4) * comp_dia ** 2
-                comp_selection = engine.BarSelection(
-                    bar_dia=comp_dia, num_bars=comp_n, ast_provided=round(comp_ast, 1),
-                    actual_clear_spacing=None, fits=True,
-                )
-            else:
-                comp_selection = engine.select_bars(ast_required=s.doubly.asc, b=s.b, clear_cover=s.effective_cover - 8, min_bars=2, max_bars=4)
-            s.comp_bar_selection = comp_selection
+        bar_selection, comp_selection = s.resolve_bars()
+        s.run_shear(); s.run_serviceability(); s.run_two_zone_shear()
+        bar_dia = bar_selection.bar_dia
+        num_bars = bar_selection.num_bars
+        ast_provided = bar_selection.ast_provided
 
         result = engine.get_detailing_check(
             b=s.b, D=s.D, d=s.flexural.d, ast=ast_required, ast_provided=ast_provided,
             bar_dia=bar_dia, num_bars=num_bars, effective_cover=s.effective_cover,
             fy=s.flexural.fy, concrete_grade=s.concrete_grade,
-            clear_cover=s.effective_cover - 8, stirrup_dia=8,
+            stirrup_dia=8, singly_reinforced=s.flexural.is_singly,
+            comp_bar_dia=comp_selection.bar_dia if comp_selection else None,
         )
         s.detailing = result
 
@@ -2075,9 +2061,14 @@ class DetailingPage(WizardPage):
         curr_row += 1
         add_grid_row(curr_row, "Maximum Ast allowed\n(Cl. 26.5.1, 4% gross)", f"{ast_provided:.1f} mm²", f"≤ {result.ast_max_allowed:.1f} mm²", "OK" if result.max_reinf_ok else "FAIL", result.max_reinf_ok)
         curr_row += 1
+        if result.xu_provided is not None:
+            add_grid_row(curr_row, "Neutral axis of provided steel\n(xu ≤ xu,max, Cl. 38.1)", f"{result.xu_provided:.1f} mm", f"≤ {result.xu_max:.1f} mm", "OK" if result.balanced_ok else "FAIL", result.balanced_ok)
+            curr_row += 1
         add_grid_row(curr_row, "Minimum clear spacing\n(Cl. 26.3.2)", f"{result.min_clear_spacing:.1f} mm")
         curr_row += 1
         add_grid_row(curr_row, "Actual clear spacing", f"{result.actual_spacing:.1f} mm" if result.actual_spacing else "N/A", f"≥ {result.min_clear_spacing:.1f} mm", "OK" if result.spacing_ok else "FAIL", result.spacing_ok)
+        curr_row += 1
+        add_grid_row(curr_row, "Clear cover to links\n(Cl. 26.4.1)", f"{result.cover_provided:.1f} mm", f"≥ {result.cover_required:.1f} mm", "OK" if result.cover_ok else "FAIL", result.cover_ok)
         curr_row += 1
         add_grid_row(curr_row, "Development length Ld\n(Cl. 26.2.1)", f"{result.development_length:.1f} mm")
         curr_row += 1
@@ -2280,8 +2271,8 @@ class DetailingPage(WizardPage):
 
         # Drawing Row 1
         row1 = QHBoxLayout()
-        cross_widget = CrossSectionWidget(s.b, s.D, s.effective_cover - 8, 8, bar_dia, num_bars, comp_selection.bar_dia if comp_selection else None, comp_selection.num_bars if comp_selection else None)
-        stirrup_widget = StirrupDetailWidget(s.b, s.D, s.effective_cover - 8, 8)
+        cross_widget = CrossSectionWidget(s.b, s.D, engine.clear_cover_to_link(s.effective_cover, bar_dia), 8, bar_dia, num_bars, comp_selection.bar_dia if comp_selection else None, comp_selection.num_bars if comp_selection else None)
+        stirrup_widget = StirrupDetailWidget(s.b, s.D, engine.clear_cover_to_link(s.effective_cover, bar_dia), 8)
         row1.addWidget(create_drawing_frame("⊖", "CROSS SECTION (END VIEW)", cross_widget), stretch=1)
         row1.addWidget(create_drawing_frame("⧉", "STIRRUP DETAIL", stirrup_widget), stretch=1)
         self.layout.addLayout(row1)
@@ -2449,7 +2440,7 @@ class SummaryPage(WizardPage):
         add_grid_row(1, "Flexural Design", f"Mu = {s.mu:.1f} kN·m", f"Mu ≤ {flex.m_lim:.2f} kN·m (Mlim)", flex_ok)
         add_grid_row(2, "Shear Design", f"τv = {shear.tau_v:.3f} N/mm²", f"τv ≤ τc,max ({shear.tau_c_max:.2f} N/mm²)", shear.safe)
         add_grid_row(3, "Serviceability", f"L/d = {service.actual_ratio:.2f}", f"Actual ≤ Allowable ({service.allowable_ratio:.2f})", service.safe)
-        add_grid_row(4, "Detailing", "Provided as per Cl. 26", "Spacing, cover, development length", detail.all_passed if detail else False)
+        add_grid_row(4, "Detailing", "Provided as per Cl. 26", "Min/max steel, xu ≤ xu,max, spacing, cover", detail.all_passed if detail else False)
 
         res_content.addLayout(grid)
         self.layout.addWidget(res_card)

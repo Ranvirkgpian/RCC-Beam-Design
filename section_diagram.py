@@ -261,7 +261,10 @@ class StirrupSpacingWidget(QWidget):
             painter.setPen(c_text)
             painter.setFont(QFont("Arial", 8))
             painter.drawText(QRectF(x0, y0 - 60, self.z1_ext * scale_x, 40), Qt.AlignCenter | Qt.AlignBottom, f"Spacing = {int(self.z1_sp)} c/c\n(within 2d from support)")
-            painter.drawText(QRectF(x0 + bw - self.z1_ext * scale_x, y0 - 60, self.z1_ext * scale_x, 40), Qt.AlignCenter | Qt.AlignBottom, f"Spacing = {int(self.z1_sp)} c/c\n(beyond 2d)")
+            painter.drawText(QRectF(x0 + bw - self.z1_ext * scale_x, y0 - 60, self.z1_ext * scale_x, 40), Qt.AlignCenter | Qt.AlignBottom, f"Spacing = {int(self.z1_sp)} c/c\n(within 2d from support)")
+            mid_w = bw - 2 * self.z1_ext * scale_x
+            if mid_w > 0:
+                painter.drawText(QRectF(x0 + self.z1_ext * scale_x, y0 - 60, mid_w, 40), Qt.AlignCenter | Qt.AlignBottom, f"Spacing = {int(self.z2_sp)} c/c\n(beyond 2d)")
             
             # Bottom Dimensions
             draw_dimension(painter, x0, y0+bh, x0 + self.z1_ext*scale_x, y0+bh, f"2d ({int(self.z1_ext)} mm)", offset=40)
@@ -323,7 +326,7 @@ class LongitudinalBarsWidget(QWidget):
         
         # Callout Bottom
         painter.setFont(QFont("Arial", 8))
-        painter.drawText(QRectF(x0, y0 + bh - 25, bw, 20), Qt.AlignCenter, f"{self.t_num} - {int(self.t_dia)} φ (Bottom)")
+        painter.drawText(QRectF(x0, y0 + bh - 42, bw, 20), Qt.AlignCenter, f"{self.t_num} - {int(self.t_dia)} φ (Bottom)")
         
         # Top Compression Bars
         if self.c_num:

@@ -203,6 +203,11 @@ def get_doubly_reinforced_design(b: float, d: float, mu: float, m_lim: float,
 # Standard available bar diameters (mm) - IS 1786 standard sizes
 STANDARD_BAR_DIAS = [10, 12, 16, 20, 25, 32]
 
+def clear_cover_to_link(effective_cover: float, bar_dia: float, stirrup_dia: float = 8.0) -> float:
+    """'Effective cover' is the distance from the outer face to the CENTRE of the tension
+    bars (d = D - effective cover). The clear cover to the link is therefore
+    effective cover - stirrup dia - bar dia / 2."""
+    return effective_cover - stirrup_dia - bar_dia / 2
 
 @dataclass
 class BarSelection:
@@ -211,11 +216,13 @@ class BarSelection:
     ast_provided: float
     actual_clear_spacing: Optional[float]
     fits: bool
+    within_limit: bool = True      # False if Ast,prov exceeds the balanced limit (singly reinforced)
 
 
 def select_bars(ast_required: float, b: float, clear_cover: float = 25,
                  aggregate_size: float = 20, stirrup_dia: float = 8,
-                 min_bars: int = 2, max_bars: int = 8) -> BarSelection:
+                 min_bars: int = 2, max_bars: int = 8,
+                 effective_cover: float = None, max_ast: float = None) -> BarSelection:
     """
     Selects the smallest practical bar diameter/count combination that:
     1. Provides Ast >= ast_required
@@ -231,8 +238,10 @@ def select_bars(ast_required: float, b: float, clear_cover: float = 25,
             ast_prov = n * bar_area
             if ast_prov < ast_required:
                 continue
-            # available width for bars, inside stirrup + clear cover on each side
-            avail_width = b - 2 * clear_cover - 2 * stirrup_dia - n * dia
+            # available width for bars, inside stirrup + clear cover on each side.
+            # If effective_cover (to bar CENTRE) is given, the clear cover depends on the bar dia.
+            cc = clear_cover_to_link(effective_cover, dia, stirrup_dia) if effective_cover is not None else clear_cover
+            avail_width = b - 2 * cc - 2 * stirrup_dia - n * dia
             clear_spacing = avail_width / (n - 1) if n > 1 else None
             min_clear = max(dia, aggregate_size + 5)
             fits = (clear_spacing is None) or (clear_spacing >= min_clear)
@@ -241,7 +250,14 @@ def select_bars(ast_required: float, b: float, clear_cover: float = 25,
                     bar_dia=dia, num_bars=n, ast_provided=round(ast_prov, 1),
                     actual_clear_spacing=round(clear_spacing, 1) if clear_spacing else None,
                     fits=True,
+                    within_limit=(max_ast is None or ast_prov <= max_ast),
                 ))
+
+    # Never prefer an arrangement that exceeds the balanced steel limit (xu > xu,max)
+    # when a compliant one exists.
+    within = [c for c in candidates if c.within_limit]
+    if within:
+        candidates = within
 
     if not candidates:
         # fall back to the best (largest Ast) option even if spacing is tight -
@@ -417,6 +433,8 @@ class ServiceabilityResult:
     actual_ratio: float
     safe: bool
     fs: float = 240.0
+    span_factor: float = 1.0                 # 10/span for spans above 10 m (Cl. 23.2.1 b)
+    needs_deflection_calc: bool = False       # cantilever above 10 m: code requires a deflection calculation
     pt: Optional[float] = None
     ast_required: Optional[float] = None
     ast_provided: Optional[float] = None
@@ -430,6 +448,16 @@ def get_serviceability_check(L: float, d: float, pt: float, support_type: str = 
         basic_ratio = custom_basic_ratio
     else:
         basic_ratio = BASIC_SPAN_DEPTH_RATIOS.get(support_type, 20)
+
+    # Cl. 23.2.1(b): for spans above 10 m the basic values may be multiplied by 10/span (m),
+    # except for cantilevers, where a deflection calculation must be made instead.
+    span_factor, needs_deflection_calc = 1.0, False
+    if custom_basic_ratio is None and L > 10:
+        if support_type == "Cantilever":
+            needs_deflection_calc = True
+        else:
+            span_factor = 10.0 / L
+            basic_ratio = basic_ratio * span_factor
 
     if fs is None:
         if ast_required and ast_provided and fy:
@@ -448,7 +476,8 @@ def get_serviceability_check(L: float, d: float, pt: float, support_type: str = 
     return ServiceabilityResult(
         basic_ratio=basic_ratio, mod_factor=mf, allowable_ratio=allowable_ratio,
         actual_ratio=actual_ratio, safe=is_safe,
-        fs=round(fs, 2), pt=round(pt, 3),
+        fs=round(fs, 2), pt=round(pt, 3), span_factor=round(span_factor, 3),
+        needs_deflection_calc=needs_deflection_calc,
         ast_required=ast_required, ast_provided=ast_provided,
     )
 
@@ -466,13 +495,20 @@ class DetailingResult:
     spacing_ok: bool
     development_length: float
     all_passed: bool
+    cover_provided: Optional[float] = None     # clear cover to links, mm
+    cover_required: Optional[float] = None
+    cover_ok: bool = True
+    xu_provided: Optional[float] = None        # singly reinforced only
+    xu_max: Optional[float] = None
+    balanced_ok: bool = True
 
 
 def get_detailing_check(b: float, D: float, d: float, ast: float, ast_provided: float,
                          bar_dia: float, num_bars: int, effective_cover: float,
                          fy: float = 500, concrete_grade: str = "M25",
                          clear_cover: float = 25, aggregate_size: float = 20,
-                         stirrup_dia: float = 8) -> DetailingResult:
+                         stirrup_dia: float = 8, singly_reinforced: bool = False,
+                         comp_bar_dia: float = None) -> DetailingResult:
     # Min/max reinforcement (Cl. 26.5.1): max is 4% of GROSS section area (b*D)
     ast_min_req = (0.85 / fy) * b * d
     ast_max_allowed = 0.04 * b * D
@@ -484,7 +520,9 @@ def get_detailing_check(b: float, D: float, d: float, ast: float, ast_provided: 
     # (bars sit inside the stirrup cage) - this matches select_bars() exactly so
     # the spacing shown here is consistent with what was used to choose the bars.
     min_clear_spacing = max(bar_dia, aggregate_size + 5) 
-    available_width = b - 2 * clear_cover - 2 * stirrup_dia - num_bars * bar_dia
+    # effective_cover is to the bar CENTRE, so the clear cover to the link depends on the bar dia
+    cc = clear_cover_to_link(effective_cover, bar_dia, stirrup_dia)
+    available_width = b - 2 * cc - 2 * stirrup_dia - num_bars * bar_dia
     actual_spacing = available_width / (num_bars - 1) if num_bars > 1 else None
     spacing_ok = actual_spacing >= min_clear_spacing if actual_spacing is not None else True
 
@@ -492,6 +530,26 @@ def get_detailing_check(b: float, D: float, d: float, ast: float, ast_provided: 
     # deformed bars get +60% bond stress increase
     tau_bd = TAU_BD_TABLE.get(concrete_grade, 1.4) * 1.6
     ld = round((bar_dia * 0.87 * fy) / (4 * tau_bd), 1)
+
+        # Cover (Cl. 26.4.1): nominal cover to the links must not be less than the bar diameter.
+    # Durability cover from Table 16 depends on the exposure condition, which is not an input here.
+    cover_t = cc
+    req_t, prov_t = bar_dia, cover_t
+    if comp_bar_dia:
+        cover_c = clear_cover_to_link(effective_cover, comp_bar_dia, stirrup_dia)
+        if (cover_c - comp_bar_dia) < (cover_t - bar_dia):
+            req_t, prov_t = comp_bar_dia, cover_c
+    cover_ok = prov_t >= req_t
+
+    # Provided steel must not exceed the balanced limit (xu <= xu,max, Cl. 38.1 / Annex G)
+    xu_prov = xu_lim = None
+    balanced_ok = True
+    if singly_reinforced:
+        fck = FCK_TABLE.get(concrete_grade, 25)
+        ratio = {415: 0.48, 500: 0.46, 550: 0.44}.get(int(fy), 0.48)
+        xu_prov = 0.87 * fy * ast_provided / (0.36 * fck * b)
+        xu_lim = ratio * d
+        balanced_ok = xu_prov <= xu_lim + 1e-6
 
     return DetailingResult(
         ast_min_req=round(ast_min_req, 1),
@@ -502,7 +560,11 @@ def get_detailing_check(b: float, D: float, d: float, ast: float, ast_provided: 
         actual_spacing=round(actual_spacing, 1) if actual_spacing is not None else None,
         spacing_ok=spacing_ok,
         development_length=ld,
-        all_passed=(min_ok and max_ok and spacing_ok),
+        all_passed=(min_ok and max_ok and spacing_ok and cover_ok and balanced_ok),
+        cover_provided=round(prov_t, 1), cover_required=round(req_t, 1), cover_ok=cover_ok,
+        xu_provided=round(xu_prov, 1) if xu_prov is not None else None,
+        xu_max=round(xu_lim, 1) if xu_lim is not None else None,
+        balanced_ok=balanced_ok,
     )
 
 
